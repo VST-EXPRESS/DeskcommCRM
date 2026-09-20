@@ -35,6 +35,11 @@
       "variant": "exception"
     },
     {
+      "id": "respostas",
+      "label": "Respostas aprovadas",
+      "variant": "exception"
+    },
+    {
       "id": "skills",
       "label": "Skills instaláveis (Fase 2)",
       "variant": "exception"
@@ -67,14 +72,7 @@
       "label": "Onde o desfecho aparece"
     }
   ],
-  "mainPath": [
-    "inbound",
-    "ingest",
-    "eventlog",
-    "turn",
-    "gates",
-    "send"
-  ],
+  "mainPath": ["inbound", "ingest", "eventlog", "turn", "gates", "send"],
   "nodes": [
     {
       "id": "inbound",
@@ -122,7 +120,7 @@
       "col": 3,
       "type": "backend",
       "label": "Turno IA",
-      "sublabel": "contexto + RAG · 2 chamadas: resposta + fechamento · kinds: inbound_turn, followup_turn, case_reply_turn",
+      "sublabel": "contexto + RAG · modelo escolhe reply_id, nunca escreve o corpo · kinds: inbound_turn, followup_turn, case_reply_turn",
       "tag": "runAgentTurn"
     },
     {
@@ -165,6 +163,22 @@
       "type": "backend",
       "label": "org_memory",
       "sublabel": "versão + ponteiro + aprendizados"
+    },
+    {
+      "id": "repliesscreen",
+      "lane": "respostas",
+      "col": 0,
+      "type": "frontend",
+      "label": "Aba Respostas",
+      "sublabel": "criar · revisar · ativar · escopo global/agente"
+    },
+    {
+      "id": "replylibrary",
+      "lane": "respostas",
+      "col": 1,
+      "type": "database",
+      "label": "ai_approved_replies",
+      "sublabel": "texto imutável no turno · tenant + agente"
     },
     {
       "id": "capacidades",
@@ -402,14 +416,27 @@
       "route": "drop"
     },
     {
+      "id": "repliesscreen-replylibrary",
+      "from": "repliesscreen",
+      "to": "replylibrary",
+      "label": "aprovação humana + escopo"
+    },
+    {
+      "id": "replylibrary-turn",
+      "from": "replylibrary",
+      "to": "turn",
+      "label": "ids + textos autorizados; envio relê pelo id",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "route": "outside-right"
+    },
+    {
       "id": "skillsscreen-skillcatalog",
       "from": "skillsscreen",
       "to": "skillcatalog",
       "label": "importa .zip / instala do catálogo",
-      "labelAt": [
-        154,
-        903
-      ]
+      "labelAt": [154, 903]
     },
     {
       "id": "skillcatalog-turn",
@@ -489,10 +516,7 @@
       "fromSide": "top",
       "toSide": "top",
       "route": "up-channel",
-      "labelAt": [
-        400,
-        1196
-      ]
+      "labelAt": [400, 1196]
     },
     {
       "id": "stagesscreen-mappingscreen",
@@ -512,10 +536,7 @@
       "route": "bottom-channel",
       "labelDy": 0,
       "channelY": 1276,
-      "labelAt": [
-        190,
-        1288
-      ]
+      "labelAt": [190, 1288]
     },
     {
       "id": "mappingscreen-stagehint",
@@ -597,10 +618,7 @@
       "fromSide": "right",
       "toSide": "right",
       "route": "outside-right",
-      "labelAt": [
-        692,
-        1399
-      ]
+      "labelAt": [692, 1399]
     },
     {
       "id": "handoff-operador",
@@ -611,10 +629,7 @@
       "fromSide": "right",
       "toSide": "right",
       "route": "outside-right",
-      "labelAt": [
-        692,
-        1531
-      ]
+      "labelAt": [692, 1531]
     },
     {
       "id": "operador-inbox",
@@ -624,10 +639,7 @@
       "fromSide": "bottom",
       "toSide": "top",
       "route": "drop",
-      "labelAt": [
-        470,
-        1531
-      ]
+      "labelAt": [470, 1531]
     },
     {
       "id": "turn-inbox",
@@ -638,10 +650,7 @@
       "fromSide": "right",
       "toSide": "right",
       "route": "outside-right",
-      "labelAt": [
-        692,
-        1565
-      ]
+      "labelAt": [692, 1565]
     },
     {
       "id": "meet-existing-gates",

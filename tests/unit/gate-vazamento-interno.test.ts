@@ -4,7 +4,6 @@ import path from "node:path";
 import type pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 
-import { MAX_VETOS_DE_VOCABULARIO_INTERNO } from "@/lib/agent-engine/agent/inbound-turn";
 import {
   BEFORE_SEND_GATES,
   internalVocabularyGate,
@@ -219,10 +218,10 @@ function corpoDoExecute(ancora: string, fim: string): string {
   return FONTE_INBOUND.slice(i, j);
 }
 
-describe("fiação do gate — armado no agente, desarmado onde o veto seria silêncio", () => {
-  it("send_message ARMA o gate", () => {
+describe("fiação do gate — só arma onde o texto pode ser corrigido", () => {
+  it("send_message NÃO arma: o texto agora é humano, aprovado e imutável", () => {
     expect(corpoDoExecute("send_message: tool({", "update_lead_state: tool({"))
-      .toMatch(/enforceInternalVocabulary:\s*true/);
+      .toMatch(/enforceInternalVocabulary:\s*false/);
   });
 
   it("o follow-up determinístico NÃO arma — lá o veto é drop silencioso", () => {
@@ -231,26 +230,15 @@ describe("fiação do gate — armado no agente, desarmado onde o veto seria sil
     expect(FONTE_FOLLOWUP).not.toMatch(/enforceInternalVocabulary/);
   });
 
-  it("send_template NÃO arma — o texto é do humano e já aprovado pela Meta", () => {
-    // Vetar aqui devolveria ao modelo a culpa por uma frase que não é dele, e a única
-    // saída seria o silêncio: ele não pode reescrever um template aprovado.
-    expect(corpoDoExecute("send_template: tool({", "search_knowledge: tool({"))
-      .not.toMatch(/enforceInternalVocabulary/);
-  });
-
-  it("o fail-safe existe: conta vetos e, ao persistir, libera DESARMANDO só este gate", () => {
-    // O cliente nunca fica sem resposta. E "liberar" é re-rodar a cadeia inteira com
-    // este gate desarmado — nunca chamar o canal por fora (perderia stop/LGPD/pacing).
+  it("nao oferece corpo livre ao modelo", () => {
     const corpo = corpoDoExecute("send_message: tool({", "update_lead_state: tool({");
-    expect(corpo).toMatch(/chain\.code === 'internal_vocabulary_leak'/);
-    expect(corpo).toMatch(/internalVocabularyVetoCount \+= 1/);
-    expect(corpo).toMatch(/internalVocabularyVetoCount < MAX_VETOS_DE_VOCABULARIO_INTERNO/);
-    expect(corpo).toMatch(/runBeforeSend\(\{[\s\S]*?enforceInternalVocabulary: false/);
+    expect(corpo).toContain("execute: async ({ reply_id })");
+    expect(corpo).toContain("const body = approvedReply.body");
+    expect(corpo).not.toContain("execute: async ({ body })");
   });
 
-  it("o teto do fail-safe deixa ao menos UMA chance de reescrita antes de liberar", () => {
-    // 1 significaria "veta e já libera" — o modelo nunca veria o erro instrutivo, e o
-    // gate seria só telemetria. 2 é o mesmo degrau do fail-safe de casos humanos.
-    expect(MAX_VETOS_DE_VOCABULARIO_INTERNO).toBeGreaterThanOrEqual(2);
+  it("nao oferece send_template como porta paralela de texto parametrizado", () => {
+    expect(FONTE_INBOUND).not.toContain("send_template: tool({");
+    expect(FONTE_INBOUND).not.toContain("AGENT_TOOL_DEFS.send_template");
   });
 });

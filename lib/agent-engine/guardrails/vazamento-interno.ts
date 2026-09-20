@@ -103,8 +103,8 @@ interface RegraTexto {
  * AGÊNCIA — que revende integração e diz "a gente configura o webhook do seu sistema" — o
  * gate cobra uma reescrita. É FP conhecido, e a saída certa para ele é lista por
  * organização, deliberadamente NÃO implementada aqui (config sem demanda medida é
- * especulação; o fail-safe de `MAX_VETOS_DE_VOCABULARIO_INTERNO` já garante que o custo
- * do FP é um turno a mais, nunca um cliente mudo).
+ * especulação). No Conversador atual o corpo vem de uma resposta aprovada e este gate
+ * fica desligado; ele permanece para superfícies que ainda avaliem conteúdo gerado.
  */
 const PALAVRAS_ARQUITETURA = [
   'webhook',

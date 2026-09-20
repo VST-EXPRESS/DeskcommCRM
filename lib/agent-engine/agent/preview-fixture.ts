@@ -6,6 +6,7 @@ import { createFakeRegistry } from '../edge/llm/providers';
 export function previewFixtureRegistry() {
   return createFakeRegistry(async (options) => {
     const text = JSON.stringify(options.prompt);
+    const approvedReplyId = text.match(/reply_id=([0-9a-f-]{36})/i)?.[1] ?? null;
     const toolResults = options.prompt.filter((m) => m.role === 'tool').flatMap((m) => m.content);
     const saw = (name: string) => toolResults.some((r) => 'toolName' in r && r.toolName === name);
     const content: Array<
@@ -41,7 +42,7 @@ export function previewFixtureRegistry() {
       const name =
         has('search_knowledge') && !saw('search_knowledge')
           ? 'search_knowledge'
-          : !saw('send_message')
+          : approvedReplyId !== null && !saw('send_message')
             ? 'send_message'
             : null;
       if (name)
@@ -52,9 +53,7 @@ export function previewFixtureRegistry() {
           input: JSON.stringify(
             name === 'search_knowledge'
               ? { query: 'informações de atendimento' }
-              : {
-                  body: 'Olá! Posso ajudar com as informações do atendimento. O que você gostaria de saber?',
-                },
+              : { reply_id: approvedReplyId },
           ),
         });
       else content.push({ type: 'text', text: 'Sugestão registrada.' });

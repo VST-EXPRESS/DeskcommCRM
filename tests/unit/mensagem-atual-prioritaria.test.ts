@@ -133,8 +133,8 @@ describe("a barreira está no caminho do envio, não numa função de ninguém",
   it("o veto tem TETO — persistir solta o envio, com registro", () => {
     // Sem teto o contador só subia, e um falso positivo teimoso calava o turno
     // inteiro: o cliente ficava sem resposta por causa de uma frase NOSSA. O
-    // padrão da casa é `MAX_VETOS_DE_VOCABULARIO_INTERNO` — 1ª vez ensina, a 2ª
-    // decide —, e soltar sem registrar seria trocar um erro visível por um mudo.
+    // 1ª vez ensina e a 2ª decide; soltar sem registrar seria trocar um erro
+    // visível por um mudo.
     expect(corpoDoSend).toMatch(/falseEmptyInboundVetoCount \+= 1/);
     expect(corpoDoSend).toMatch(/falseEmptyInboundVetoCount < MAX_VETOS_DE_FALSO_VAZIO/);
     expect(corpoDoSend).toMatch(

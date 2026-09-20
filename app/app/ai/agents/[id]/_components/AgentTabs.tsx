@@ -17,6 +17,7 @@ import { ProposalsPanel } from "./ProposalsPanel";
 import type { AgentRow } from "@/hooks/ai/useAgent";
 import type { AgentVersionRow } from "@/hooks/ai/useAgentVersions";
 import type { CredentialRow } from "@/hooks/ai/useCredentials";
+import { ApprovedRepliesPanel } from "./ApprovedRepliesPanel";
 
 interface Props {
   /** Funis da org, para a marcação de escopo do agente (spec 17 passo 3). */
@@ -43,7 +44,7 @@ interface Props {
 export function AgentTabs(props: Props) {
   const t = useT();
   const [tab, setTab] = React.useState<
-    "configuration" | "test" | "capacidades" | "runs" | "history" | "proposals"
+    "configuration" | "replies" | "test" | "capacidades" | "runs" | "history" | "proposals"
   >("configuration");
   const hasVersion = !!(props.draft || props.published);
 
@@ -55,6 +56,7 @@ export function AgentTabs(props: Props) {
     >
       <TabsList>
         <TabsTrigger value="configuration">{t("Configuração")}</TabsTrigger>
+        <TabsTrigger value="replies">{t("Respostas")}</TabsTrigger>
         <TabsTrigger value="test" disabled={!hasVersion}>
           {t("Teste")}
         </TabsTrigger>
@@ -88,6 +90,14 @@ export function AgentTabs(props: Props) {
           agent={props.agent}
           draft={props.draft}
           published={props.published}
+          readOnly={props.readOnly}
+        />
+      </TabsContent>
+
+      <TabsContent value="replies" className="m-0">
+        <ApprovedRepliesPanel
+          agentId={props.agent.id}
+          active={tab === "replies"}
           readOnly={props.readOnly}
         />
       </TabsContent>

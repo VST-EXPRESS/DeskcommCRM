@@ -22,6 +22,7 @@ import { DEFAULT_CHANNEL_PROVIDER } from '@/lib/channels/capabilities';
 import { getToolByName } from '@/lib/mcp/tools';
 import type { Logger } from '../obs/logger';
 import type { Citation } from '@/lib/ai/citations/types';
+import { findApprovedReply, type ApprovedReply } from './approved-replies';
 
 export interface TurnPreview {
   kind: 'sandbox' | 'assisted';
@@ -143,6 +144,7 @@ export function applyPreviewPolicy(
   citations: () => Citation[],
   semanticClassifier?: (body: string) => Promise<NonNullable<GateContext['semanticPromise']>>,
   liveContext?: () => Partial<GateContext>,
+  approvedReplies: readonly ApprovedReply[] = [],
 ): ToolSet {
   return Object.fromEntries(
     Object.entries(tools).map(([name, definition]) => {
@@ -164,10 +166,23 @@ export function applyPreviewPolicy(
           ...definition,
           execute: async (args: unknown) => {
             if (name === 'send_message') {
-              const body =
-                args && typeof args === 'object' && 'body' in args && typeof args.body === 'string'
-                  ? args.body
+              const replyId =
+                args &&
+                typeof args === 'object' &&
+                'reply_id' in args &&
+                typeof args.reply_id === 'string'
+                  ? args.reply_id
                   : '';
+              const approvedReply = findApprovedReply(approvedReplies, replyId);
+              if (approvedReply === null) {
+                const message = 'Resposta aprovada indisponível para este agente.';
+                p.result.impediments.push({ code: 'approved_reply_not_available', message });
+                return {
+                  ok: false,
+                  error: { code: 'approved_reply_not_available', message },
+                };
+              }
+              const body = approvedReply.body;
               const result = evaluateBeforeSend({
                 ...ctx,
                 ...liveContext?.(),
@@ -203,7 +218,6 @@ export function applyPreviewPolicy(
             if (
               catalog ||
               [
-                'send_template',
                 'update_lead_state',
                 'save_lead_note',
                 'request_human_handoff',

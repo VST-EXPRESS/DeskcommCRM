@@ -6,6 +6,11 @@ import { applyPreviewPolicy, newPreviewResult, scenarioContext, type TurnPreview
 import { evaluateBeforeSend, type GateContext } from '../guardrails/before-send';
 import { PACING_DEFAULTS } from '../pacing/defaults';
 import { SPINNING_DEFAULTS } from '../spinning/defaults';
+import type { ApprovedReply } from './approved-replies';
+const APPROVED_ID = '11111111-1111-4111-8111-111111111111';
+const approved = (body = 'Olá, posso ajudar?'): ApprovedReply[] => [
+  { id: APPROVED_ID, agentId: null, label: 'Teste', body },
+];
 const gate = (): GateContext => ({
   now: new Date('2026-09-07T15:00:00Z'),
   body: 'Olá, posso ajudar?',
@@ -39,7 +44,7 @@ const preview = () =>
   }) as TurnPreview;
 const definition = (execute: (args: unknown) => unknown) =>
   tool({
-    inputSchema: z.object({ body: z.string().optional() }),
+    inputSchema: z.object({}).passthrough(),
     execute: async (args) => execute(args),
   });
 async function execute(t: ReturnType<typeof applyPreviewPolicy>, name: string, args: unknown = {}) {
@@ -55,9 +60,12 @@ describe('preview policy shares gates and contains side effects', () => {
       p,
       gate(),
       () => [],
+      undefined,
+      undefined,
+      approved(),
     );
     await execute(tools, 'update_lead_state', { stage: 'qualified' });
-    await execute(tools, 'send_message', { body: 'Olá, posso ajudar?' });
+    await execute(tools, 'send_message', { reply_id: APPROVED_ID });
     expect(send).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
     expect(p.result.proposals).toHaveLength(1);
@@ -67,8 +75,16 @@ describe('preview policy shares gates and contains side effects', () => {
     const p = preview(),
       ctx = { ...gate(), optedOut: true },
       spy = vi.fn();
-    const tools = applyPreviewPolicy({ send_message: definition(spy) }, p, ctx, () => []);
-    await execute(tools, 'send_message', { body: ctx.body });
+    const tools = applyPreviewPolicy(
+      { send_message: definition(spy) },
+      p,
+      ctx,
+      () => [],
+      undefined,
+      undefined,
+      approved(ctx.body),
+    );
+    await execute(tools, 'send_message', { reply_id: APPROVED_ID });
     expect(p.result.candidates).toEqual([]);
     expect(p.result.impediments[0]?.code).toBe(evaluateBeforeSend(ctx).veto?.code);
     expect(spy).not.toHaveBeenCalled();
@@ -84,9 +100,12 @@ describe('preview policy shares gates and contains side effects', () => {
       p,
       gate(),
       () => [],
+      undefined,
+      undefined,
+      approved('Conhecimento autorizado'),
     );
     await execute(tools, 'search_knowledge');
-    await execute(tools, 'send_message', { body: 'Conhecimento autorizado' });
+    await execute(tools, 'send_message', { reply_id: APPROVED_ID });
     expect(read).toHaveBeenCalledOnce();
     expect(p.result.candidates).toHaveLength(1);
   });
@@ -132,11 +151,12 @@ it('refreshes agenda read state for each candidate while writes stay proposals',
     () => [],
     undefined,
     () => ({ agenda: { active: true, ferramentas: ['crm_find_free_slots'], toolCalledThisTurn: called } }),
+    approved('Vou verificar o horário para você.'),
   );
-  await execute(tools, 'send_message', { body: 'Vou verificar o horário para você.' });
+  await execute(tools, 'send_message', { reply_id: APPROVED_ID });
   expect(p.result.impediments.some((i) => i.code === 'agenda_stall_sem_ferramenta')).toBe(true);
   await execute(tools, 'crm_find_free_slots');
-  await execute(tools, 'send_message', { body: 'Vou verificar o horário para você.' });
+  await execute(tools, 'send_message', { reply_id: APPROVED_ID });
   expect(p.result.candidates).toHaveLength(1);
 });
 it('uses only supplied in-memory sample contact in sandbox', () => {
