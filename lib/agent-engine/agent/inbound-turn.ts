@@ -1,6 +1,5 @@
 import { setExecutionAgentOperation } from '@/lib/atendimento/fronteira-server';
 import { TIPOS_DE_CASO, TIPOS_DE_CASO_PARA_A_IA } from "@/lib/ai/case-copy";
-import { DEFAULT_CHANNEL_PROVIDER } from '@/lib/channels/capabilities';
 import { applyPreviewPolicy, previewGateContext, type TurnPreview } from './preview';
 import { claimOfJob } from '../queue/claim';
 import { currentExecutionBoundary, guardServiceEffect } from '@/lib/atendimento/fronteira-server';
@@ -149,10 +148,7 @@ import {
 } from './skills';
 import { readSkillReference, skillHasReferences } from './skill-references';
 import { READ_ONLY_TOOLS, wrapToolsWithBreaker, type ToolBreakerThresholds } from './tool-breaker';
-import { loadChannelProvider, nomesDasFerramentas, runBeforeSend } from '../guardrails/before-send';
-import { isStatusSendable } from '../../channels/meta/template-binding';
-import { capabilitiesOf } from '@/lib/channels/capabilities';
-import { renderTemplateBody } from '@/lib/channels/meta/render-template';
+import { nomesDasFerramentas, runBeforeSend } from '../guardrails/before-send';
 import { esperarComoHumano } from './atraso-humano';
 import { sendInBubbles } from './split-message';
 import type { DisclosureMode } from '../guardrails/disclosure/template';
@@ -175,6 +171,12 @@ import { camadaLigada, lerCamadasDaOrg } from '../guardrails/camadas-da-org';
 import { fusoDaOrganizacao } from './fuso-da-org';
 import { renderAgora } from '@/lib/tempo/agora';
 import { decidirElegibilidadeDaConversa } from '@/lib/ai/elegibilidade/consulta-pg';
+import {
+  approvedReplyIdSchema,
+  findApprovedReply,
+  loadApprovedReplies,
+  renderApprovedReplies,
+} from './approved-replies';
 
 /**
  * Superfície ESTÁTICA das tools do agente (description + inputSchema) — parte do
@@ -190,10 +192,12 @@ export const AGENT_TOOL_DEFS = {
   },
   send_message: {
     description:
-      'Envia UMA mensagem de WhatsApp ao lead desta conversa. É o ÚNICO jeito de falar com o lead; texto fora desta tool nunca é enviado.',
-    inputSchema: z.object({
-      body: z.string().min(1).describe('corpo da mensagem, em pt-br, pronto para envio'),
-    }),
+      'Envia UMA resposta previamente aprovada ao lead. Escolha somente um reply_id da lista de respostas aprovadas; não existe campo de texto livre.',
+    inputSchema: z
+      .object({
+        reply_id: approvedReplyIdSchema.describe('id exato de uma resposta aprovada disponivel'),
+      })
+      .strict(),
   },
   update_lead_state: {
     description:
@@ -368,34 +372,7 @@ export const AGENT_TOOL_DEFS = {
       })
       .passthrough(),
   },
-  send_template: {
-    description:
-      'Envia um TEMPLATE aprovado do WhatsApp. Use SOMENTE quando o send_message for recusado ' +
-      'porque a janela de 24 horas com o contato fechou — a mensagem de erro diz quando é o caso. ' +
-      'Você precisa do nome exato do template, do idioma e de um valor para CADA parâmetro. ' +
-      'Se faltar valor, a resposta diz quais e você pode chamar de novo; qualquer outro erro ' +
-      'significa que um humano precisa agir — encerre o turno sem insistir.',
-    inputSchema: z
-      .object({
-        template_name: z.string().min(1).describe('nome exato do template, como aprovado na Meta'),
-        language: z.string().min(2).describe('código do idioma, ex.: pt_BR'),
-        values: z
-          .record(z.string(), z.string())
-          .describe(
-            'valor de cada parâmetro, na chave que a tela de templates mostra (ex.: "1", "2")',
-          ),
-      })
-      .passthrough(),
-  },
 } as const;
-
-/**
- * Quantos vetos de `internal_vocabulary_leak` o turno tolera antes de o fail-safe soltar
- * o envio (ver o bloco em `send_message.execute`). Mesmo degrau do fail-safe de casos
- * humanos — 1ª vez ensina, a 2ª decide — porque a assimetria é a mesma: uma reescrita
- * que o modelo não fez não vale um cliente sem resposta.
- */
-export const MAX_VETOS_DE_VOCABULARIO_INTERNO = 2;
 
 /**
  * O mesmo degrau para o veto de `false_empty_inbound`, e pela mesma assimetria.
@@ -1005,7 +982,7 @@ export interface InboundTurnKnobs {
   maxSteps: number;
   /**
    * Teto de mensagens FÍSICAS enviadas ao lead neste turno (MAX_SENDS_PER_TURN),
-   * send_message + send_template somados, bolhas incluídas. Ausente = usa
+   * send_message, com todas as bolhas incluídas. Ausente = usa
    * `DEFAULT_MAX_SENDS_PER_TURN` — main.ts sempre o preenche pelo knob do env;
    * testes que não exercitam o teto o omitem sem custo.
    */
@@ -1416,8 +1393,8 @@ export function buildOpeningMessage(
     '',
     ...mensagemAtualBlock,
     '',
-    'Responda ao lead usando a tool send_message — NUNCA escreva a resposta como texto direto',
-    '(texto fora de tool é descartado pelo runtime). Use get_lead_context se precisar reler o contexto.',
+    'Escolha UMA resposta aprovada e chame send_message somente com o reply_id correspondente.',
+    'Nunca escreva, adapte, complete ou combine o texto. Texto fora de tool é descartado pelo runtime.',
     // Quando o avanço do funil vira trabalho do Operador, o Conversador não
     // precisa saber que existe um funil. É a diferença entre "não fale disso" e
     // "não há disso no seu contexto" — a segunda não depende de obediência.
@@ -2054,13 +2031,18 @@ async function executarTurnoDoAgente(
   // Agenda segue o mesmo padrão, condicionado a `crm_book_appointment` estar entre as
   // tools publicadas — ver comentário de `agendaSystemBlock`. `TRANSPARENCIA_SYSTEM_BLOCK`
   // não depende de nenhuma feature — todo agente publicado o recebe.
-  const blocosResidentes = [systemWithMemory, TRANSPARENCIA_SYSTEM_BLOCK];
+  const approvedReplies = await loadApprovedReplies(pool, tenantId, agentConfig?.agentId ?? null);
+  const blocosResidentes = [
+    systemWithMemory,
+    TRANSPARENCIA_SYSTEM_BLOCK,
+    renderApprovedReplies(approvedReplies),
+  ];
   if (agentConfig !== null && agentConfig.casesEnabled) blocosResidentes.push(CASES_SYSTEM_BLOCK);
   const blocoDaAgenda = agentConfig === null ? null : blocoResidenteDaAgenda(agentConfig.toolIds);
   if (blocoDaAgenda !== null) blocosResidentes.push(blocoDaAgenda);
   if (preview)
     blocosResidentes.push(
-      'MODO PRÉVIA: proponha a resposta com send_message. Operações são propostas separadas; nunca diga que executou uma proposta. Nenhum envio real acontece.',
+      'MODO PRÉVIA: escolha uma resposta aprovada com send_message. Operações são propostas separadas; nunca diga que executou uma proposta. Nenhum envio real acontece.',
     );
   const system = blocosResidentes.join('\n\n');
   const previous = preview
@@ -2226,6 +2208,25 @@ async function executarTurnoDoAgente(
     return; // bot silencia: a confirmação já saiu, e nada mais sai neste turno
   }
 
+  // Sem biblioteca não existe fallback criativo: a conversa volta para uma
+  // pessoa antes de qualquer chamada ao modelo.
+  if (!preview && approvedReplies.length === 0) {
+    await performHumanHandoff(
+      pool,
+      { tenantId, leadId, conversationId: input.conversationId },
+      {
+        reason: 'approved_reply_missing',
+        conversationSummary: buildHandoffSummary(previous),
+        inboxTitle: 'Agente sem resposta aprovada — atendimento humano necessário',
+        log: runLog,
+      },
+    );
+    runLog.warn('turno encaminhado ao humano porque o agente não tem resposta aprovada', {
+      agent_id: agentConfig?.agentId ?? null,
+    });
+    return;
+  }
+
   // F3-07: compaction + flush pré-compaction. Quando o histórico cresce além do limiar,
   // o FLUSH grava as notas duráveis (lead_notes) e a compaction resume a conversa com o
   // modelo BARATO; o resumo compactado entra no lugar do rolling summary e o transcript
@@ -2335,7 +2336,7 @@ async function executarTurnoDoAgente(
   // Estado do RUN — vive só neste closure (isolamento por construção, acc 3).
   let seq = 0;
   // Teto de mensagens físicas por turno (F2-15b) — `seq` JÁ é a contagem certa: ele só
-  // avança quando o envio de fato sai pro canal (send_message + send_template, bolhas
+  // avança quando o envio de fato sai pro canal (send_message, bolhas
   // incluídas), nunca em veto de gate. Checar `seq` antes de tentar o próximo envio
   // barra o modelo sem gastar uma chamada de before-send à toa.
   const maxSendsPerTurn = deps.knobs.maxSendsPerTurn ?? DEFAULT_MAX_SENDS_PER_TURN;
@@ -2373,17 +2374,13 @@ async function executarTurnoDoAgente(
   // 1º veto no turno é erro-de-ensino (o modelo re-tenta); persistir uma 2ª vez aciona o
   // auto-abre-caso (ver send_message.execute). Por turno (closure), nunca cross-turno.
   let casePromiseVetoCount = 0;
-  // Contador do fail-safe do gate de vazamento de vocabulário interno
-  // (`internal_vocabulary_leak`): 1º veto no turno ensina o modelo a reescrever; persistir
-  // solta o envio com registro. Por turno (closure), nunca cross-turno.
-  let internalVocabularyVetoCount = 0;
   // Uma recusa deste tipo devolve o texto confirmado ao modelo para que ele
   // reescreva antes de falar com o cliente. Não gasta envio nem toca no canal.
   let falseEmptyInboundVetoCount = 0;
   // A pausa humana (atraso-humano.ts) já foi paga NESTE turno? Por turno
   // (closure), como os contadores acima. O turno pode passar pela cadeia
   // `before_send` mais de uma vez — o modelo pode chamar `send_message` várias
-  // vezes, e os fail-safes de promessa/vocabulário re-rodam a cadeia inteira.
+  // vezes, e os fail-safes de promessa/falso-vazio re-rodam a cadeia inteira.
   // Sem este flag, cada passagem cobraria do cliente uma espera nova, e um
   // turno com dois vetos ficaria mudo por mais de 20 segundos: o conserto do
   // "rápido demais" viraria o defeito simétrico, mais caro que o original.
@@ -2547,122 +2544,6 @@ async function executarTurnoDoAgente(
         }
       },
     }),
-    send_template: tool({
-      ...AGENT_TOOL_DEFS.send_template,
-      execute: async ({ template_name, language, values }) => {
-        if (seq >= maxSendsPerTurn) {
-          return {
-            ok: false,
-            error: {
-              code: 'max_sends_per_turn',
-              message:
-                `você já enviou ${seq} mensagens neste turno (teto: ${maxSendsPerTurn}). ` +
-                'NÃO envie mais nada agora — encerre o turno e espere a resposta do lead.',
-            },
-          };
-        }
-        // O texto RENDERIZADO vai como `body` da cadeia: os gates de promessa,
-        // spinning e disclosure avaliam exatamente o que o contato vai ler. Sem
-        // isso, "usar template" seria a forma de escapar dos guardrails de conteúdo.
-        const { rows } = await pool.query<{
-          components: unknown;
-          parameter_format: string;
-          status: string;
-        }>(
-          `select components, parameter_format, status from meta_templates
-            where organization_id = $1 and name = $2 and language = $3`,
-          [tenantId, template_name, language],
-        );
-        const linha = rows[0];
-        if (linha === undefined) {
-          return {
-            ok: false,
-            error: {
-              code: 'template_desconhecido',
-              message:
-                `não existe template "${template_name}" em ${language} nesta conta. ` +
-                'Encerre o turno; um humano precisa configurá-lo.',
-            },
-          };
-        }
-        // "Existe" não é "pode ser disparado". A regra vive em template-binding.ts e
-        // o caminho HUMANO já a respeitava (recusa `not_approved` no menu do composer);
-        // este caminho não a consultava — e é o que age SEM humano olhando. Um template
-        // PENDING ou REJECTED iria à Graph API, voltaria erro genérico, e o modelo
-        // trataria como falha de infraestrutura em vez de configuração pendente.
-        //
-        // Erro SEPARADO de `template_desconhecido` de propósito: as duas causas pedem
-        // ações humanas diferentes — criar o template, ou esperar/consertar a análise
-        // da Meta. Colapsá-las manda o operador procurar no lugar errado.
-        if (!isStatusSendable(linha.status)) {
-          return {
-            ok: false,
-            error: {
-              code: 'template_nao_aprovado',
-              message:
-                `o template "${template_name}" existe mas está ${linha.status} na Meta — ` +
-                'só um template APPROVED pode ser disparado. Encerre o turno; ' +
-                'um humano precisa resolver a aprovação.',
-            },
-          };
-        }
-
-        const rendered = renderTemplateBody(linha.components, values, {
-          name: template_name,
-          language,
-          parameterFormat: linha.parameter_format,
-        });
-
-        const chain = await runBeforeSend({
-          pool,
-          log: runLog,
-          agentOperation,
-          tenantId,
-          leadId,
-          jobId: liveJob().id,
-          channelSessionId: input.channelSessionId,
-          body: rendered,
-          // Só ESTE gate muda; stop, LGPD e pacing continuam valendo integralmente.
-          isTemplate: true,
-          optedOutThisTurn,
-          crmDailyLimit: null,
-          now: clock(),
-          sleep: deps.sleep,
-          lgpd,
-          send: (finalBody: string) => {
-            seq += 1;
-            return liveChannel().send({
-              tenantId,
-              leadId,
-              jobId: liveJob().id,
-              jobClaim: claimOfJob(liveJob()),
-              agentOperation,
-              seq,
-              conversationId: input.conversationId,
-              body: finalBody,
-              template: { name: template_name, language, values },
-            });
-          },
-        });
-
-        if (chain.status === 'vetoed') {
-          return { ok: false, error: { code: chain.code, message: chain.message } };
-        }
-        const outcome = chain.outcome;
-        outcomes.push(outcome);
-        if (outcome.kind === 'sent' || outcome.kind === 'already_sent') {
-          return {
-            ok: true,
-            status: 'enviada',
-            message_id: outcome.messageId,
-            // Explícito: sem isso o modelo tende a emendar texto livre depois do
-            // template — que a janela fechada recusaria.
-            message: 'template enviado. Não escreva mais nada neste turno.',
-          };
-        }
-        return { ok: true, status: 'aceita_aguardando_canal' };
-      },
-    }),
     search_knowledge: tool({
       ...AGENT_TOOL_DEFS.search_knowledge,
       execute: async ({ query }) => {
@@ -2705,7 +2586,19 @@ async function executarTurnoDoAgente(
     }),
     send_message: tool({
       ...AGENT_TOOL_DEFS.send_message,
-      execute: async ({ body }) => {
+      execute: async ({ reply_id }) => {
+        const approvedReply = findApprovedReply(approvedReplies, reply_id);
+        if (approvedReply === null) {
+          return {
+            ok: false,
+            error: {
+              code: 'approved_reply_not_available',
+              message:
+                'Essa resposta não está disponível para este agente. Escolha outro reply_id da lista aprovada ou encaminhe para uma pessoa.',
+            },
+          };
+        }
+        const body = approvedReply.body;
         if (claimsCurrentInboundIsEmpty(body, mensagemDoJob)) {
           falseEmptyInboundVetoCount += 1;
           if (falseEmptyInboundVetoCount < MAX_VETOS_DE_FALSO_VAZIO) {
@@ -2789,16 +2682,11 @@ async function executarTurnoDoAgente(
             // do CLIENTE, agora somado ao alvo genérico do `casePromiseGate` do lado do
             // que o MODELO promete. Ver `GateContext.humanPromiseExtraTargets`.
             humanPromiseExtraTargets: agentConfig?.handoffKeywords ?? [],
-            // A rede contra vazamento de vocabulário interno arma AQUI e só aqui: este é
-            // o único corpo escrito pelo MODELO, e o único caminho em que o veto vira
-            // erro instrutivo que ele pode consertar no turno seguinte. O `send_template`
-            // (mais acima) fica desarmado de propósito — o texto lá é do humano e já
-            // aprovado pela Meta; vetá-lo devolveria ao modelo a culpa por uma frase que
-            // não é dele, e a única saída seria o silêncio. O follow-up determinístico
-            // idem (ver GateContext.internalVocabularyEnforced).
-            enforceInternalVocabulary: true,
-            // Mesmo padrão do vocabulário interno: só o `send_message` arma — é o único
-            // corpo escrito pelo modelo. `active` é ter QUALQUER ferramenta de agenda:
+            // Texto aprovado por uma pessoa não pode ser reescrito pelo modelo.
+            // Os demais gates continuam armados integralmente.
+            enforceInternalVocabulary: false,
+            // A agenda continua avaliando o texto aprovado escolhido. `active` é ter
+            // QUALQUER ferramenta de agenda:
             // um agente que só CONSULTA promete "vou verificar" igual, e enquanto a
             // condição era só `crm_book_appointment` ele ficava sem o gate. Quem não tem
             // ferramenta de agenda nenhuma segue desarmado — vetá-lo não teria cura.
@@ -2910,40 +2798,25 @@ async function executarTurnoDoAgente(
               openedCaseThisTurn: true,
             });
           }
-          if (chain.status === 'vetoed' && chain.code === 'internal_vocabulary_leak') {
-            // Fail-safe do gate de vazamento — O CLIENTE NUNCA FICA SEM RESPOSTA.
-            //
-            // Este gate é REDE, não invariante sagrada (ao contrário do case_promise, cuja
-            // 2ª camada ABRE o caso antes de liberar). Aqui não há o que o sistema possa
-            // fazer no lugar do modelo: ou ele reescreve, ou a escolha é entre uma frase
-            // com um termo técnico e o silêncio. Silêncio é pior — some com o atendimento
-            // sem sintoma, que é o oposto do invariante 4 do sistema vivo. Então: 1º veto
-            // ensina (o modelo re-tenta); persistiu, o envio sai DESARMANDO só este gate —
-            // todos os outros continuam valendo, porque o re-run passa pela cadeia inteira.
-            //
-            // O veto da 1ª tentativa já virou linha em `before_send_traces` (com a
-            // categoria do vazamento) e atividade na timeline: a liberação não apaga a
-            // medição, que é o produto deste gate.
-            internalVocabularyVetoCount += 1;
-            if (internalVocabularyVetoCount < MAX_VETOS_DE_VOCABULARIO_INTERNO) {
-              return { ok: false, error: { code: chain.code, message: chain.message } };
-            }
-            runLog.warn(
-              'fail-safe do gate de vocabulário interno: envio liberado após vetos seguidos',
-              {
-                vetos: internalVocabularyVetoCount,
-              },
-            );
-            // `openedCaseThisTurn` vai pelo valor VIVO (o fail-safe de casos acima pode
-            // tê-lo mudado); reusar o do objeto capturado re-vetaria no case_promise.
-            chain = await runBeforeSend({
-              ...beforeSendArgs,
-              openedCaseThisTurn,
-              hasOpenCase: hasOpenCase || openedCaseThisTurn,
-              enforceInternalVocabulary: false,
-            });
-          }
           if (chain.status === 'vetoed') {
+            if (chain.code === 'messaging_window_closed') {
+              await performHumanHandoff(
+                pool,
+                { tenantId, leadId, conversationId: input.conversationId },
+                {
+                  reason: 'approved_reply_outside_window',
+                  conversationSummary: buildHandoffSummary(previous),
+                  inboxTitle:
+                    'Resposta aprovada bloqueada pela janela do canal — atendimento humano necessário',
+                  log: runLog,
+                },
+              );
+              return {
+                ok: true,
+                status: 'handoff',
+                message: 'Janela do canal fechada; atendimento encaminhado para uma pessoa.',
+              };
+            }
             // Cap de warm-up/diário: reescrever o texto não resolve (é rate limit, não
             // conteúdo) — ensinar o modelo a "tentar de novo" só gasta passo. Guardamos
             // pra reagendar o JOB inteiro depois que o turno terminar (mesmo padrão de
@@ -2961,18 +2834,26 @@ async function executarTurnoDoAgente(
           }
           const outcome = chain.outcome;
           outcomes.push(outcome);
-          if (outcome.kind === 'sent' && pendingCitations.length > 0) {
+          if (outcome.kind === 'sent') {
             try {
               await pool.query(
                 `update messages
                  set metadata = coalesce(metadata, '{}'::jsonb)
-                   || jsonb_build_object('citations', $3::jsonb, 'ai_generated', true)
+                   || $3::jsonb
                  where organization_id = $1 and id = $2`,
-                [tenantId, outcome.messageId, JSON.stringify(pendingCitations)],
+                [
+                  tenantId,
+                  outcome.messageId,
+                  JSON.stringify({
+                    approved_reply_id: approvedReply.id,
+                    ai_generated: false,
+                    ...(pendingCitations.length > 0 ? { citations: pendingCitations } : {}),
+                  }),
+                ],
               );
             } catch (err) {
-              // citação é enriquecimento, não invariante — falha só loga.
-              runLog.warn('citações não anexadas à outbound', {
+              // O envio já saiu; metadata é recibo e observabilidade, não pode duplicá-lo.
+              runLog.warn('recibo da resposta aprovada não anexado à outbound', {
                 message_id: outcome.messageId,
                 error: (err instanceof Error ? err.message : String(err)).slice(0, 120),
               });
@@ -3413,19 +3294,6 @@ async function executarTurnoDoAgente(
     delete rawTools.search_knowledge;
   }
 
-  // A ferramenta de template só entra em canal que EXIGE template fora da janela.
-  // Num canal que fala livre a qualquer hora ela nunca teria uso — e tool inútil no
-  // prompt não é neutra: gasta contexto e degrada a escolha do modelo.
-  {
-    const provider =
-      preview && !preview.channelId
-        ? DEFAULT_CHANNEL_PROVIDER
-        : await loadChannelProvider(pool, tenantId, input.channelSessionId);
-    if (!capabilitiesOf(provider).requiresTemplates) {
-      delete rawTools.send_template;
-    }
-  }
-
   // 2B-tools: tools do catálogo MCP habilitadas NA TELA entram no run (audit +
   // role/scope da ponte nativa; envio e handoff do catálogo são bloqueados —
   // ver edge/crm/mcp-tools.ts). As 8 tools do engine têm precedência de nome.
@@ -3555,6 +3423,7 @@ async function executarTurnoDoAgente(
                 toolCalledThisTurn: agendaToolCalledThisTurn,
               },
             }),
+            approvedReplies,
           )
         : rawTools;
     const tools = wrapToolsWithBreaker(previewTools, {

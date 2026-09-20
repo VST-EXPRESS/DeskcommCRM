@@ -9150,6 +9150,44 @@ export const DICIONARIO: Traducoes = {
   "Um material marcado aqui foi arquivado no acervo — o agente não lê mais ele.": { es: "Un material marcado aquí fue archivado en el acervo — el agente ya no lo lee." },
   "Materiais marcados aqui foram arquivados no acervo — o agente não lê mais eles.": { es: "Materiales marcados aquí fueron archivados en el acervo — el agente ya no los lee." },
   "Desmarque para voltar a salvar.": { es: "Desmárcalo para volver a guardar." },
+  "Respostas": { es: "Respuestas" },
+  "Biblioteca de respostas aprovadas": { es: "Biblioteca de respuestas aprobadas" },
+  "A IA apenas escolhe uma destas respostas. Ela não pode escrever, completar ou alterar o texto enviado.": {
+    es: "La IA solo elige una de estas respuestas. No puede escribir, completar ni alterar el texto enviado.",
+  },
+  "Nome interno": { es: "Nombre interno" },
+  "Ex.: Horário de saída": { es: "Ej.: Horario de salida" },
+  "Quem pode usar": { es: "Quién puede usarla" },
+  "Somente este agente": { es: "Solo este agente" },
+  "Todos os agentes": { es: "Todos los agentes" },
+  "Texto exato que será enviado": { es: "Texto exacto que se enviará" },
+  "Escreva aqui a resposta já revisada e aprovada.": {
+    es: "Escribe aquí la respuesta ya revisada y aprobada.",
+  },
+  "Adicionar resposta": { es: "Agregar respuesta" },
+  "Cancelar edição": { es: "Cancelar edición" },
+  "Carregando respostas...": { es: "Cargando respuestas..." },
+  "Nenhuma resposta aprovada": { es: "Ninguna respuesta aprobada" },
+  "Enquanto a biblioteca estiver vazia, este agente não responde e encaminha o atendimento para uma pessoa.": {
+    es: "Mientras la biblioteca esté vacía, este agente no responde y deriva la atención a una persona.",
+  },
+  "Não foi possível carregar as respostas aprovadas.": {
+    es: "No fue posible cargar las respuestas aprobadas.",
+  },
+  "Informe o nome e o texto da resposta.": {
+    es: "Indica el nombre y el texto de la respuesta.",
+  },
+  "Resposta aprovada atualizada.": { es: "Respuesta aprobada actualizada." },
+  "Resposta aprovada criada.": { es: "Respuesta aprobada creada." },
+  "Não foi possível salvar. Confira se o nome já existe neste escopo.": {
+    es: "No fue posible guardar. Comprueba si el nombre ya existe en este ámbito.",
+  },
+  "Não foi possível alterar o estado da resposta.": {
+    es: "No fue posible cambiar el estado de la respuesta.",
+  },
+  "Excluir esta resposta?": { es: "¿Eliminar esta respuesta?" },
+  "Resposta excluída.": { es: "Respuesta eliminada." },
+  "Não foi possível excluir a resposta.": { es: "No fue posible eliminar la respuesta." },
 };
 
 /**
