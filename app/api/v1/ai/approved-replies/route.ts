@@ -2,18 +2,18 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { requireSupportWrite } from "@/lib/impersonate/support";
+import { audit } from "@/lib/audit";
 import { chaveDaRequisicao, comIdempotencia } from "@/lib/api/idempotency";
-import { ok, fail } from "@/lib/api/wrappers";
+import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
+import { requireSupportWrite } from "@/lib/impersonate/support";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { audit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
-const ENDPOINT = "/api/v1/ai/agents/:id/approved-replies";
+const ENDPOINT = "/api/v1/ai/approved-replies";
+const COLUMNS = "id, organization_id, agent_id, label, body, is_active, created_at, updated_at";
 
-const UUID_RX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const createSchema = z
   .object({
     label: z.string().trim().min(1).max(120),
@@ -21,50 +21,31 @@ const createSchema = z
   })
   .strict();
 
-type RouteCtx = { params: Promise<{ id: string }> };
-
-async function agentExists(admin: ReturnType<typeof createAdminClient>, orgId: string, id: string) {
-  const { data } = await admin
-    .from("ai_agents")
-    .select("id")
-    .eq("organization_id", orgId)
-    .eq("id", id)
-    .is("archived_at", null)
-    .maybeSingle();
-  return data !== null;
-}
-
-export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
+export async function GET(_req: NextRequest): Promise<Response> {
   const requestId = randomUUID();
-  const { id } = await ctx.params;
-  if (!UUID_RX.test(id)) return fail("invalid_request", "Agente invalido.", 400, { requestId });
-
   const authz = await requireRole("manager", { requestId, resource: "ai_approved_replies" });
   if (!authz.ok) return authz.response;
-  const admin = createAdminClient();
-  if (!(await agentExists(admin, authz.org.orgId, id)))
-    return fail("not_found", "Agente nao encontrado.", 404, { requestId });
 
+  const admin = createAdminClient();
   const { data, error } = await admin
     .from("ai_approved_replies")
-    .select("id, organization_id, agent_id, label, body, is_active, created_at, updated_at")
+    .select(COLUMNS)
     .eq("organization_id", authz.org.orgId)
-    .eq("agent_id", id)
+    .is("agent_id", null)
     .order("label", { ascending: true });
   if (error)
-    return fail("internal_error", "Erro ao carregar respostas aprovadas.", 500, { requestId });
+    return fail("internal_error", "Erro ao carregar respostas globais.", 500, { requestId });
   return ok(data ?? [], { requestId });
 }
 
-export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
+export async function POST(req: NextRequest): Promise<Response> {
   const supportDenied = await requireSupportWrite();
   if (supportDenied) return supportDenied;
-  const requestId = randomUUID();
-  const { id } = await ctx.params;
-  if (!UUID_RX.test(id)) return fail("invalid_request", "Agente invalido.", 400, { requestId });
 
+  const requestId = randomUUID();
   const authz = await requireRole("admin", { requestId, resource: "ai_approved_replies" });
   if (!authz.ok) return authz.response;
+
   let raw: unknown;
   try {
     raw = await req.json();
@@ -81,24 +62,22 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const idempotencyKey = chaveDaRequisicao(req);
   if (idempotencyKey !== null && !z.string().uuid().safeParse(idempotencyKey).success)
     return fail("validation_error", "Idempotency-Key deve ser UUID.", 400, { requestId });
+
   const { org, user } = authz;
   const input = parsed.data;
-
   const admin = createAdminClient();
-  if (!(await agentExists(admin, org.orgId, id)))
-    return fail("not_found", "Agente nao encontrado.", 404, { requestId });
 
   async function createReply() {
     const { data, error } = await admin
       .from("ai_approved_replies")
       .insert({
         organization_id: org.orgId,
-        agent_id: id,
+        agent_id: null,
         label: input.label,
         body: input.body,
         created_by: user.id,
       })
-      .select("id, organization_id, agent_id, label, body, is_active, created_at, updated_at")
+      .select(COLUMNS)
       .single();
     if (error || !data) throw new Error("approved_reply_create_failed", { cause: error?.code });
 
@@ -109,7 +88,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
       resourceType: "ai_approved_reply",
       resourceId: data.id,
       requestId,
-      metadata: { agent_id: id, scope: "agent" },
+      metadata: { scope: "global" },
     });
     return data;
   }
@@ -122,7 +101,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
       organizationId: org.orgId,
       endpoint: ENDPOINT,
       chave: idempotencyKey,
-      corpo: { agent_id: id, ...input },
+      corpo: input,
       executar: async () => ({ resposta: await createReply(), status: 201 }),
     });
     if (outcome.tipo === "conflito")
@@ -135,9 +114,9 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     return ok(outcome.resposta, { status: 201, requestId });
   } catch (error) {
     if (error instanceof Error && error.cause === "23505")
-      return fail("state_conflict", "Ja existe uma resposta com esse nome neste escopo.", 409, {
+      return fail("state_conflict", "Ja existe uma resposta global com esse nome.", 409, {
         requestId,
       });
-    return fail("internal_error", "Erro ao criar resposta aprovada.", 500, { requestId });
+    return fail("internal_error", "Erro ao criar resposta global.", 500, { requestId });
   }
 }

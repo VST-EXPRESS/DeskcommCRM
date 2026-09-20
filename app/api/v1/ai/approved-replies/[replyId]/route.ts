@@ -2,15 +2,16 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { requireSupportWrite } from "@/lib/impersonate/support";
-import { ok, fail, noContent } from "@/lib/api/wrappers";
-import { requireRole } from "@/lib/auth/require-role";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { audit } from "@/lib/audit";
+import { fail, noContent, ok } from "@/lib/api/wrappers";
+import { requireRole } from "@/lib/auth/require-role";
+import { requireSupportWrite } from "@/lib/impersonate/support";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
-
 const UUID_RX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const COLUMNS = "id, organization_id, agent_id, label, body, is_active, created_at, updated_at";
+
 const patchSchema = z
   .object({
     label: z.string().trim().min(1).max(120).optional(),
@@ -20,30 +21,30 @@ const patchSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 0, "Informe ao menos uma alteracao.");
 
-type RouteCtx = { params: Promise<{ id: string; replyId: string }> };
+type RouteCtx = { params: Promise<{ replyId: string }> };
 
-async function loadAuthorizedReply(
+async function globalReplyExists(
   admin: ReturnType<typeof createAdminClient>,
   orgId: string,
-  agentId: string,
   replyId: string,
 ) {
   const { data } = await admin
     .from("ai_approved_replies")
-    .select("id, agent_id, label, body, is_active")
+    .select("id")
     .eq("organization_id", orgId)
     .eq("id", replyId)
-    .eq("agent_id", agentId)
+    .is("agent_id", null)
     .maybeSingle();
-  return data;
+  return data !== null;
 }
 
 export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const supportDenied = await requireSupportWrite();
   if (supportDenied) return supportDenied;
+
   const requestId = randomUUID();
-  const { id, replyId } = await ctx.params;
-  if (!UUID_RX.test(id) || !UUID_RX.test(replyId))
+  const { replyId } = await ctx.params;
+  if (!UUID_RX.test(replyId))
     return fail("invalid_request", "Identificador invalido.", 400, { requestId });
   const authz = await requireRole("admin", { requestId, resource: "ai_approved_replies" });
   if (!authz.ok) return authz.response;
@@ -62,27 +63,23 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     });
 
   const admin = createAdminClient();
-  const existing = await loadAuthorizedReply(admin, authz.org.orgId, id, replyId);
-  if (!existing) return fail("not_found", "Resposta nao encontrada.", 404, { requestId });
-  const update: Record<string, unknown> = {};
-  if (parsed.data.label !== undefined) update.label = parsed.data.label;
-  if (parsed.data.body !== undefined) update.body = parsed.data.body;
-  if (parsed.data.is_active !== undefined) update.is_active = parsed.data.is_active;
+  if (!(await globalReplyExists(admin, authz.org.orgId, replyId)))
+    return fail("not_found", "Resposta global nao encontrada.", 404, { requestId });
 
   const { data, error } = await admin
     .from("ai_approved_replies")
-    .update(update)
+    .update(parsed.data)
     .eq("organization_id", authz.org.orgId)
     .eq("id", replyId)
-    .eq("agent_id", id)
-    .select("id, organization_id, agent_id, label, body, is_active, created_at, updated_at")
+    .is("agent_id", null)
+    .select(COLUMNS)
     .single();
   if (error?.code === "23505")
-    return fail("state_conflict", "Ja existe uma resposta com esse nome neste escopo.", 409, {
+    return fail("state_conflict", "Ja existe uma resposta global com esse nome.", 409, {
       requestId,
     });
   if (error || !data)
-    return fail("internal_error", "Erro ao atualizar resposta aprovada.", 500, { requestId });
+    return fail("internal_error", "Erro ao atualizar resposta global.", 500, { requestId });
 
   void audit({
     action: "ai_agent.approved_reply_updated",
@@ -91,7 +88,7 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     resourceType: "ai_approved_reply",
     resourceId: replyId,
     requestId,
-    metadata: { agent_id: id, fields: Object.keys(update) },
+    metadata: { scope: "global", fields: Object.keys(parsed.data) },
   });
   return ok(data, { requestId });
 }
@@ -99,24 +96,28 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
 export async function DELETE(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const supportDenied = await requireSupportWrite();
   if (supportDenied) return supportDenied;
+
   const requestId = randomUUID();
-  const { id, replyId } = await ctx.params;
-  if (!UUID_RX.test(id) || !UUID_RX.test(replyId))
+  const { replyId } = await ctx.params;
+  if (!UUID_RX.test(replyId))
     return fail("invalid_request", "Identificador invalido.", 400, { requestId });
   const authz = await requireRole("admin", { requestId, resource: "ai_approved_replies" });
   if (!authz.ok) return authz.response;
 
   const admin = createAdminClient();
-  const existing = await loadAuthorizedReply(admin, authz.org.orgId, id, replyId);
-  if (!existing) return fail("not_found", "Resposta nao encontrada.", 404, { requestId });
-  const { error } = await admin
+  if (!(await globalReplyExists(admin, authz.org.orgId, replyId)))
+    return fail("not_found", "Resposta global nao encontrada.", 404, { requestId });
+
+  const { data: deleted, error } = await admin
     .from("ai_approved_replies")
     .delete()
     .eq("organization_id", authz.org.orgId)
     .eq("id", replyId)
-    .eq("agent_id", id);
-  if (error)
-    return fail("internal_error", "Erro ao excluir resposta aprovada.", 500, { requestId });
+    .is("agent_id", null)
+    .select("id")
+    .maybeSingle();
+  if (error) return fail("internal_error", "Erro ao excluir resposta global.", 500, { requestId });
+  if (!deleted) return fail("not_found", "Resposta global nao encontrada.", 404, { requestId });
 
   void audit({
     action: "ai_agent.approved_reply_deleted",
@@ -125,7 +126,7 @@ export async function DELETE(_req: NextRequest, ctx: RouteCtx): Promise<Response
     resourceType: "ai_approved_reply",
     resourceId: replyId,
     requestId,
-    metadata: { agent_id: id, scope: "agent" },
+    metadata: { scope: "global" },
   });
   return noContent(requestId);
 }
