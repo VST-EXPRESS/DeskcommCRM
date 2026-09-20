@@ -22,14 +22,25 @@ aparece na tela do agente. Se a janela do canal oficial estiver fechada, o turno
 um humano: o Conversador não recebe `send_template` como rota alternativa. O modelo não pode usar
 texto solto: o runtime já o descarta e a única ferramenta de fala não possui argumento de corpo.
 
+## Cadastro e separação das bibliotecas
+
+- **Respostas globais** (`/app/templates`): cadastra somente linhas com `agent_id is null` e as
+  disponibiliza para todos os agentes da organização.
+- **Agente > Respostas**: cadastra somente linhas com `agent_id = agente editado`. A tela não lista
+  respostas globais nem permite converter uma resposta entre os dois escopos.
+- Apesar de os cadastros serem separados, o runtime reúne as respostas globais e as exclusivas do
+  agente antes de apresentar as opções ao modelo.
+
 ## Living System Checklist
 
-- Entrada: admin cria e aprova o texto na aba Respostas do editor do agente.
+- Entrada: admin cria textos globais em Respostas globais e textos exclusivos na aba Respostas do
+  editor do agente.
 - Saida: `loadApprovedReplies()` alimenta o turno e `send_message` alimenta a cadeia before-send.
 - Registro: create/update/delete em `api_audit_log`; outbound leva `approved_reply_id` no metadata.
 - Tela/porta: IA > Agentes > agente > Respostas.
 - Anti-morte: sem opção, o agente deve encaminhar ao humano; nunca improvisa.
-- Configuração: a mesma aba permite criar, editar, ativar, desativar e excluir.
+- Configuração: cada tela permite criar, editar, ativar, desativar e excluir apenas o próprio
+  escopo.
 - Continuidade: handoff existente leva checkpoint e contexto da conversa.
 - Laço: o recibo por `approved_reply_id` permite medir uso e revisar textos que não resolvem.
 

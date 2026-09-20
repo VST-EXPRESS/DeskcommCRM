@@ -441,6 +441,7 @@ export const DICIONARIO: Traducoes = {
   Agenda: { es: "Agenda" },
   Radar: { es: "Radar" },
   "Respostas rápidas": { es: "Respuestas rápidas" },
+  "Respostas globais": { es: "Respuestas globales" },
   Contatos: { es: "Contactos" },
   // A CHAVE É O TEXTO PT-BR, então renomear um rótulo no registro de navegação
   // sem mexer aqui NÃO quebra teste nenhum — degrada em silêncio: `traduzir()`
@@ -9151,6 +9152,23 @@ export const DICIONARIO: Traducoes = {
   "Materiais marcados aqui foram arquivados no acervo — o agente não lê mais eles.": { es: "Materiales marcados aquí fueron archivados en el acervo — el agente ya no los lee." },
   "Desmarque para voltar a salvar.": { es: "Desmárcalo para volver a guardar." },
   "Respostas": { es: "Respuestas" },
+  "Respostas exclusivas deste agente": { es: "Respuestas exclusivas de este agente" },
+  "Cadastre aqui somente as respostas que este agente pode usar. Ele também pode usar as respostas globais.": {
+    es: "Registra aquí solo las respuestas que este agente puede usar. También puede usar las respuestas globales.",
+  },
+  "Este agente ainda não tem respostas exclusivas. Ele continua podendo usar as respostas globais.": {
+    es: "Este agente todavía no tiene respuestas exclusivas. Puede seguir usando las respuestas globales.",
+  },
+  "Biblioteca global de respostas": { es: "Biblioteca global de respuestas" },
+  "Respostas aprovadas que todos os agentes de IA desta organização podem usar.": {
+    es: "Respuestas aprobadas que todos los agentes de IA de esta organización pueden usar.",
+  },
+  "Tudo que for cadastrado aqui fica disponível para todos os agentes de IA. O texto é enviado exatamente como foi escrito.": {
+    es: "Todo lo registrado aquí queda disponible para todos los agentes de IA. El texto se envía exactamente como fue escrito.",
+  },
+  "Nenhuma resposta global foi cadastrada. Os agentes ainda podem usar suas respostas exclusivas.": {
+    es: "No se registró ninguna respuesta global. Los agentes aún pueden usar sus respuestas exclusivas.",
+  },
   "Biblioteca de respostas aprovadas": { es: "Biblioteca de respuestas aprobadas" },
   "A IA apenas escolhe uma destas respostas. Ela não pode escrever, completar ou alterar o texto enviado.": {
     es: "La IA solo elige una de estas respuestas. No puede escribir, completar ni alterar el texto enviado.",
@@ -9181,6 +9199,9 @@ export const DICIONARIO: Traducoes = {
   "Resposta aprovada criada.": { es: "Respuesta aprobada creada." },
   "Não foi possível salvar. Confira se o nome já existe neste escopo.": {
     es: "No fue posible guardar. Comprueba si el nombre ya existe en este ámbito.",
+  },
+  "Não foi possível salvar. Confira se o nome já existe.": {
+    es: "No fue posible guardar. Comprueba si el nombre ya existe.",
   },
   "Não foi possível alterar o estado da resposta.": {
     es: "No fue posible cambiar el estado de la respuesta.",

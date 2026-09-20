@@ -141,15 +141,15 @@ export const NAV_CATALOG = [
     sidebar: true,
   },
   {
-    // Renomeado de "Templates": estes são scripts do atendente, consumidos pelo
-    // Composer do inbox. O nome "Templates" fica livre para os da Meta (HSM),
-    // onde é o termo técnico correto.
+    // A URL histórica permanece, mas a tela agora é a biblioteca de respostas
+    // aprovadas disponível para todos os agentes de IA da organização.
     href: "/app/templates",
-    label: "Respostas rápidas",
-    description: "Scripts salvos para responder mais rápido, seus ou da equipe.",
+    label: "Respostas globais",
+    description: "Textos aprovados que todos os agentes de IA podem usar.",
     icon: "FileText",
     group: "atendimento",
     sidebar: true,
+    minRole: "manager",
   },
 
   // ---- CRM — o funil ----
